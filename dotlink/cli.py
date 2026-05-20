@@ -1,82 +1,94 @@
-"""Command-line interface for dotlink link management commands."""
+"""Command-line interface for dotlink."""
 
-import sys
+from __future__ import annotations
+
 import click
 
-from dotlink.config import find_config_path, load_config, save_config
-from dotlink.links import create_link, remove_link, list_links, LinkError
+from dotlink.config import init_config, load_config, save_config
+from dotlink.links import LinkError, create_link, link_status, remove_link
+from dotlink.sync import SyncError, sync
 
 
 @click.group()
-def cli():
-    """dotlink — a simple dotfile symlink manager."""
-    pass
+def cli() -> None:
+    """dotlink — a simple dotfile manager."""
 
 
 @cli.command("add")
 @click.argument("source")
 @click.argument("target")
-@click.option("--overwrite", is_flag=True, default=False, help="Overwrite existing target.")
-def add_link(source: str, target: str, overwrite: bool):
-    """Track and create a symlink from TARGET -> SOURCE."""
-    config_path = find_config_path()
-    config = load_config(config_path)
-
+@click.option("--overwrite", is_flag=True, default=False, help="Replace existing target.")
+def add_link(source: str, target: str, overwrite: bool) -> None:
+    """Track SOURCE as a symlink at TARGET."""
     try:
         create_link(source, target, overwrite=overwrite)
     except LinkError as exc:
-        click.echo(f"Error: {exc}", err=True)
-        sys.exit(1)
+        raise click.ClickException(str(exc)) from exc
 
-    config.setdefault("links", {})[source] = target
-    save_config(config_path, config)
-    click.echo(f"Linked: {target} -> {source}")
+    config = load_config()
+    entry = {"source": source, "target": target}
+    if entry not in config.setdefault("links", []):
+        config["links"].append(entry)
+        save_config(config)
+    click.echo(f"Linked {source} -> {target}")
 
 
 @cli.command("remove")
-@click.argument("source")
-def remove_link_cmd(source: str):
-    """Remove the symlink for SOURCE and stop tracking it."""
-    config_path = find_config_path()
-    config = load_config(config_path)
-    links = config.get("links", {})
-
-    if source not in links:
-        click.echo(f"Error: '{source}' is not tracked.", err=True)
-        sys.exit(1)
-
-    target = links[source]
+@click.argument("target")
+def remove_link_cmd(target: str) -> None:
+    """Remove the symlink at TARGET and stop tracking it."""
     try:
         remove_link(target)
     except LinkError as exc:
-        click.echo(f"Warning: {exc}", err=True)
+        raise click.ClickException(str(exc)) from exc
 
-    del links[source]
-    save_config(config_path, config)
-    click.echo(f"Removed link: {target}")
+    config = load_config()
+    config["links"] = [
+        e for e in config.get("links", []) if e.get("target") != target
+    ]
+    save_config(config)
+    click.echo(f"Removed link {target}")
 
 
 @cli.command("status")
-def status():
+def status() -> None:
     """Show the status of all tracked symlinks."""
-    config_path = find_config_path()
-    config = load_config(config_path)
-    links = config.get("links", {})
-
+    config = load_config()
+    links = config.get("links", [])
     if not links:
         click.echo("No links tracked.")
         return
-
-    statuses = list_links(links)
-    for entry in statuses:
-        symbol = {
-            "linked": click.style("✔", fg="green"),
-            "not_linked": click.style("✘", fg="yellow"),
-            "missing_source": click.style("!", fg="red"),
-            "conflict": click.style("~", fg="magenta"),
-        }.get(entry["status"], "?")
-        click.echo(f"  {symbol}  {entry['target']} -> {entry['source']}  [{entry['status']}]")
+    for entry in links:
+        src = entry.get("source", "?")
+        tgt = entry.get("target", "?")
+        state = link_status(src, tgt)
+        symbol = {"ok": "✔", "missing": "✘", "conflict": "!", "broken": "~"}.get(state, "?")
+        click.echo(f"  {symbol} {tgt} -> {src}  [{state}]")
 
 
-if __name__ == "__main__":
-    cli()
+@cli.command("sync")
+def sync_cmd() -> None:
+    """Pull the git repo and reapply all tracked symlinks."""
+    try:
+        result = sync()
+    except SyncError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo(f"git pull: {result['pull_output'] or 'no output'}")
+    for tgt in result["ok"]:
+        click.echo(f"  ✔ {tgt}")
+    for tgt, msg in result["errors"]:
+        click.echo(f"  ✘ {tgt}: {msg}", err=True)
+    if result["errors"]:
+        raise click.ClickException("Some links could not be applied.")
+
+
+@cli.command("init")
+@click.option("--repo", default="~/dotfiles", show_default=True, help="Path to the dotfiles git repo.")
+def init(repo: str) -> None:
+    """Initialise a new dotlink config file."""
+    try:
+        path = init_config(repo_path=repo)
+        click.echo(f"Initialised dotlink config at {path}")
+    except FileExistsError as exc:
+        raise click.ClickException(str(exc)) from exc
