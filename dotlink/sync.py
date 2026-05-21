@@ -1,13 +1,10 @@
-"""Sync dotfiles repository — pull latest changes and reapply links."""
-
-from __future__ import annotations
+"""Sync dotfiles repo and reapply links."""
 
 import subprocess
 from pathlib import Path
-from typing import List, Tuple
+from typing import List
 
-from dotlink.config import load_config
-from dotlink.links import LinkError, create_link, link_status
+from dotlink.links import LinkStatus, create_link, link_status
 
 
 class SyncError(Exception):
@@ -15,10 +12,7 @@ class SyncError(Exception):
 
 
 def git_pull(repo_path: Path) -> str:
-    """Run `git pull` inside *repo_path* and return stdout.
-
-    Raises SyncError on non-zero exit code.
-    """
+    """Run `git pull` in *repo_path* and return stdout."""
     result = subprocess.run(
         ["git", "pull"],
         cwd=repo_path,
@@ -27,53 +21,43 @@ def git_pull(repo_path: Path) -> str:
     )
     if result.returncode != 0:
         raise SyncError(
-            f"git pull failed in {repo_path}:\n{result.stderr.strip()}"
+            f"git pull failed (exit {result.returncode}):\n{result.stderr.strip()}"
         )
-    return result.stdout.strip()
+    return result.stdout
 
 
-def reapply_links(
-    config: dict,
-) -> Tuple[List[str], List[Tuple[str, str]]]:
-    """Reapply all links defined in *config*.
-
-    Returns:
-        ok      – list of target paths that were successfully linked.
-        errors  – list of (target, error_message) tuples.
-    """
-    ok: List[str] = []
-    errors: List[Tuple[str, str]] = []
-
-    for entry in config.get("links", []):
-        source = entry.get("source", "")
-        target = entry.get("target", "")
-        if not source or not target:
-            errors.append((target or source, "missing source or target"))
-            continue
-
+def reapply_links(config: dict) -> List[str]:
+    """Ensure every tracked link exists; return list of recreated link names."""
+    recreated: List[str] = []
+    for name, entry in config.get("links", {}).items():
+        source = Path(entry["source"]).expanduser()
+        target = Path(entry["target"]).expanduser()
         status = link_status(source, target)
-        if status == "ok":
-            ok.append(target)
-            continue
+        if status != LinkStatus.OK:
+            create_link(source, target)
+            recreated.append(name)
+    return recreated
 
+
+def sync(config: dict, run_hooks: bool = True) -> dict:
+    """Pull latest changes and reapply links, running hooks when available."""
+    from dotlink.hooks import HookError, run_hook  # local import to avoid cycles
+
+    repo = Path(config.get("repo_path", "~/.dotfiles")).expanduser()
+
+    if run_hooks:
         try:
-            create_link(source, target, overwrite=True)
-            ok.append(target)
-        except LinkError as exc:
-            errors.append((target, str(exc)))
+            run_hook(config, "pre-sync")
+        except HookError as exc:
+            raise SyncError(f"pre-sync hook failed: {exc}") from exc
 
-    return ok, errors
+    pull_output = git_pull(repo)
+    recreated = reapply_links(config)
 
+    if run_hooks:
+        try:
+            run_hook(config, "post-sync")
+        except HookError as exc:
+            raise SyncError(f"post-sync hook failed: {exc}") from exc
 
-def sync(config_path: Path | None = None) -> dict:
-    """Pull the git repo and reapply all tracked symlinks.
-
-    Returns a result dict with keys: ``pull_output``, ``ok``, ``errors``.
-    """
-    config = load_config(config_path)
-    repo_path = Path(config["repo_path"]).expanduser()
-
-    pull_output = git_pull(repo_path)
-    ok, errors = reapply_links(config)
-
-    return {"pull_output": pull_output, "ok": ok, "errors": errors}
+    return {"pull_output": pull_output, "recreated": recreated}
