@@ -79,3 +79,22 @@ def restore_backup(backup_path: str | Path, destination: str | Path) -> None:
             shutil.copy2(backup_path, destination)
     except OSError as exc:
         raise BackupError(f"Failed to restore {backup_path} -> {destination}: {exc}") from exc
+
+
+def purge_old_backups(config: dict, keep: int = 10) -> list[Path]:
+    """Remove the oldest backup snapshots, keeping at most *keep* snapshots.
+
+    Returns a list of snapshot directories that were deleted.
+
+    Raises BackupError if a snapshot directory cannot be removed.
+    """
+    snapshots = list_backups(config)
+    to_delete = snapshots[: max(0, len(snapshots) - keep)]
+    removed: list[Path] = []
+    for snapshot in to_delete:
+        try:
+            shutil.rmtree(snapshot)
+            removed.append(snapshot)
+        except OSError as exc:
+            raise BackupError(f"Failed to remove old backup {snapshot}: {exc}") from exc
+    return removed
