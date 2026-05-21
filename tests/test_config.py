@@ -51,6 +51,14 @@ def test_load_config_file_not_found(tmp_path):
         load_config(tmp_path / "nonexistent.json")
 
 
+def test_load_config_invalid_json(tmp_path):
+    """Ensure load_config raises a clear error when the config file contains invalid JSON."""
+    config_path = tmp_path / DEFAULT_CONFIG_FILENAME
+    config_path.write_text("{ this is not valid json ", encoding="utf-8")
+    with pytest.raises(json.JSONDecodeError):
+        load_config(config_path)
+
+
 def test_find_config_path_in_current_dir(tmp_path):
     config_path = tmp_path / DEFAULT_CONFIG_FILENAME
     config_path.write_text("{}", encoding="utf-8")
