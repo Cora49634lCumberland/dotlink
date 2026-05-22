@@ -46,6 +46,18 @@ def test_add_pattern(runner, base_config):
     assert "*.log" in _ignore_path(base_config).read_text()
 
 
+def test_add_multiple_patterns(runner, base_config):
+    """Adding several patterns in sequence should persist all of them."""
+    for pattern in ["*.log", ".env", "*.swp"]:
+        result = runner.invoke(ignore_cmd, ["add", pattern])
+        assert result.exit_code == 0
+
+    ignore_text = _ignore_path(base_config).read_text()
+    assert "*.log" in ignore_text
+    assert ".env" in ignore_text
+    assert "*.swp" in ignore_text
+
+
 def test_add_duplicate_pattern_fails(runner, base_config):
     runner.invoke(ignore_cmd, ["add", "*.log"])
     result = runner.invoke(ignore_cmd, ["add", "*.log"])
