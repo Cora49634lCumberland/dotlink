@@ -7,6 +7,7 @@ import click
 from dotlink.config import load_config, find_config_path
 from dotlink.ignore import (
     IgnoreError,
+    is_ignored,
     load_patterns,
     add_pattern,
     remove_pattern,
@@ -62,14 +63,14 @@ def remove_cmd(pattern: str) -> None:
 
 
 @ignore_cmd.command("check")
-@click.argument("name")
-def check_cmd(name: str) -> None:
-    """Check whether NAME would be ignored."""
+@click.argument("names", nargs=-1, required=True)
+def check_cmd(names: tuple[str, ...]) -> None:
+    """Check whether one or more NAMEs would be ignored."""
     cfg_path = find_config_path()
     config = load_config(cfg_path)
     patterns = load_patterns(config)
-    from dotlink.ignore import is_ignored
-    if is_ignored(name, patterns):
-        click.echo(f"{name} is IGNORED")
-    else:
-        click.echo(f"{name} is NOT ignored")
+    for name in names:
+        if is_ignored(name, patterns):
+            click.echo(f"{name} is IGNORED")
+        else:
+            click.echo(f"{name} is NOT ignored")
